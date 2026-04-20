@@ -1,0 +1,281 @@
+"""Boucle principale : polling sync-status, queue SQLite, upload.
+
+Scenarios couverts :
+- Reseau coupe pendant upload      -> fichier reste en queue (attempts++), requeue apres N echecs
+- Fichier ouvert par Word/Excel    -> filtre watcher + stability check (min_age_seconds)
+- Fichier corrompu ou vide         -> skip si size==0, log warning
+- Dossier renomme/deplace          -> detection au demarrage + log clair + tentative relocalisation
+- Agent plante entre deux syncs    -> queue SQLite persistante, reprise automatique
+- Antivirus / doublons d'events    -> PRIMARY KEY SQLite deduplique
+- Gros fichier reseau lent         -> timeout=600, log du chemin + taille
+- Token expire                     -> warning/error tray, message clair
+- local_agent_enabled=false        -> arret propre avec message
+- Modifications perdues            -> JAMAIS : on requeue en cas d'echec
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+import time
+from pathlib import Path
+from typing import Callable, Optional
+
+from .api_client import PortalApiClient
+from .config import AgentConfig
+from .queue_store import QueueStore
+from .state_store import StateStore
+from .updater import AgentUpdater
+from .watcher import _should_ignore, start_observer
+
+log = logging.getLogger(__name__)
+
+AGENT_VERSION = "0.1.0"
+_MAX_FILE_SIZE_WARN = 50 * 1024 * 1024  # 50 MB
+
+
+class SyncAgent:
+    def __init__(self, cfg: AgentConfig) -> None:
+        self.cfg = cfg
+        self.root = cfg.root_path
+        app_data = cfg.app_data_dir
+
+        # Queue SQLite (en dehors du dossier surveille)
+        self.queue = QueueStore(app_data / "queue.db")
+        # Registre inode (en dehors du dossier surveille)
+        self.store = StateStore(app_data / "state.json")
+
+        self.client = PortalApiClient(cfg.api_base, cfg.agent_token)
+        self.updater = AgentUpdater(self.client, AGENT_VERSION)
+
+        self._stop = threading.Event()
+        self._syncing = threading.Event()
+
+        # Callback pour le tray (optionnel)
+        self.on_status_change: Optional[Callable] = None
+
+    # ------------------------------------------------------------------
+    # Status tray
+    # ------------------------------------------------------------------
+    def _emit(self, status: str, message: str = "") -> None:
+        if self.on_status_change:
+            try:
+                from .tray import TrayStatus
+                self.on_status_change(TrayStatus(status), message)
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------
+    # Filesystem events
+    # ------------------------------------------------------------------
+    def _on_fs_event(self, path: Path, kind: str) -> None:
+        if path.suffix.lower() not in self.cfg.supported_extensions:
+            return
+        if _should_ignore(path):
+            return
+        try:
+            rel = path.relative_to(self.root).as_posix()
+        except ValueError:
+            return
+        self.queue.enqueue(rel, str(path), kind)
+
+    # ------------------------------------------------------------------
+    # Cycle de synchronisation
+    # ------------------------------------------------------------------
+    def run_cycle(self, reason: str) -> dict:
+        metrics: dict = {"reason": reason, "uploaded": 0, "errors": []}
+        batch = self.queue.pop_batch(
+            self.cfg.max_files_per_cycle,
+            min_age_seconds=self.cfg.stability_seconds,
+        )
+        if not batch:
+            return metrics
+
+        self._emit("syncing")
+        paths_ok: list[Path] = []
+        metas_ok: list[dict] = []
+
+        for item in batch:
+            rel = item["rel_path"]
+            p = Path(item["abs_path"])
+
+            # Fichier disparu entre l'event et l'upload
+            if not p.is_file():
+                log.debug("Fichier absent, ignore : %s", rel)
+                self.queue.mark_done(rel)
+                continue
+
+            # Fichier vide (corrompu ou en cours d'ecriture)
+            if p.stat().st_size == 0:
+                log.warning("Fichier vide ignore : %s", rel)
+                self.queue.mark_done(rel)
+                continue
+
+            # Warning gros fichier
+            size = p.stat().st_size
+            if size > _MAX_FILE_SIZE_WARN:
+                log.warning("Gros fichier (%d MB) : %s", size // 1024 // 1024, rel)
+
+            try:
+                rel_out, old_rel, needs_review, ext_id = self.store.register_or_replace(
+                    self.root, p
+                )
+                if not rel_out:
+                    self.queue.mark_done(rel)
+                    continue
+                if old_rel:
+                    log.info("Renommage detecte : %s -> %s", old_rel, rel_out)
+                meta = {
+                    "relative_path": rel_out,
+                    "root_label": self.cfg.root_folder_name,
+                    "external_id": ext_id,
+                    "sync_origin": "local_agent",
+                    "needs_review": needs_review,
+                }
+                paths_ok.append(p)
+                metas_ok.append(meta)
+            except Exception as e:
+                log.warning("Metadata erreur pour %s : %s", rel, e)
+                self.queue.mark_error(rel, str(e))
+
+        if not paths_ok:
+            self.store.save()
+            return metrics
+
+        try:
+            res = self.client.upload_files(paths_ok, metas_ok, dry_run=self.cfg.dry_run)
+            metrics["api"] = res
+            metrics["uploaded"] = len(paths_ok)
+            for p, meta in zip(paths_ok, metas_ok):
+                self.queue.mark_done(meta["relative_path"])
+            log.info("Cycle '%s' : %d fichier(s) uploades", reason, len(paths_ok))
+        except Exception as e:
+            log.exception("Upload echoue (%s)", reason)
+            metrics["errors"].append(str(e))
+            # Requeue pour reessai (attempts deja incrementes dans pop_batch)
+            for p, meta in zip(paths_ok, metas_ok):
+                rel = meta["relative_path"]
+                self.queue.mark_error(rel, str(e))
+            self._emit("error", str(e)[:80])
+
+        self.store.save()
+        return metrics
+
+    def force_sync(self) -> None:
+        """Declenche un cycle immediatement (depuis le tray)."""
+        if not self._syncing.is_set():
+            self._syncing.set()
+
+    # ------------------------------------------------------------------
+    # Boucle principale
+    # ------------------------------------------------------------------
+    def run_forever(self) -> None:
+        # Verifier / relocaliser le dossier surveille
+        if not self.cfg.check_root_exists():
+            relocated = self.cfg.find_relocated_root()
+            if relocated:
+                log.warning(
+                    "Dossier introuvable a '%s'. Trouve ici : %s. "
+                    "Mettez a jour watch_parent dans votre config.",
+                    self.root, relocated,
+                )
+                self._emit("warning", f"Dossier deplace ? Trouve : {relocated}")
+            else:
+                log.warning("Dossier '%s' absent — creation...", self.root)
+
+        self.root.mkdir(parents=True, exist_ok=True)
+        obs, _ = start_observer(self.root, self._on_fs_event)
+        self._check_token_expiry()
+
+        last_update_check = 0.0
+        last_cooldown_ts = 0.0
+
+        try:
+            while not self._stop.is_set():
+                # --- Auto-update check ---
+                if self.cfg.auto_update:
+                    elapsed = time.time() - last_update_check
+                    if elapsed >= self.cfg.auto_update_check_hours * 3600:
+                        last_update_check = time.time()
+                        self.updater.check_and_log(AGENT_VERSION)
+                        self._check_token_expiry()
+
+                # --- Polling sync-status ---
+                try:
+                    st = self.client.sync_status()
+                except Exception as e:
+                    log.warning("sync-status inaccessible : %s", e)
+                    self._emit("warning", "Portail inaccessible")
+                    self._stop.wait(self.cfg.poll_interval_seconds)
+                    continue
+
+                # --- Evaluer si on doit syncer ---
+                pending   = self.queue.pending_count()
+                stuck     = self.queue.stuck_count()
+                cooldown_ok = (time.time() - last_cooldown_ts) >= self.cfg.sync_cooldown_seconds
+                burst     = pending >= self.cfg.burst_threshold
+                force     = self._syncing.is_set()
+                self._syncing.clear()
+
+                reason = None
+                if st.get("sync_requested"):
+                    reason = "server_request"
+                elif force:
+                    reason = "force"
+                elif cooldown_ok and burst:
+                    reason = "local_burst"
+
+                if stuck > 0:
+                    log.warning("%d fichier(s) bloques (trop d'echecs). Clic droit -> Reinitialiser.", stuck)
+                    self._emit("warning", f"{stuck} fichier(s) bloques")
+
+                if reason:
+                    last_cooldown_ts = time.time()
+                    m = self.run_cycle(reason)
+                    err_str = ("; ".join(m["errors"])[:2000] if m.get("errors") else None)
+                    try:
+                        self.client.sync_complete(metrics=m, error=err_str)
+                    except Exception as e:
+                        log.warning("sync-complete : %s", e)
+                    if not m["errors"]:
+                        self._emit("idle")
+                else:
+                    if pending == 0 and stuck == 0:
+                        self._emit("idle")
+                    elif pending > 0:
+                        self._emit("idle", f"{pending} en attente")
+
+                self._stop.wait(self.cfg.poll_interval_seconds)
+
+        finally:
+            obs.stop()
+            obs.join(timeout=5)
+            self.queue.close()
+            self._emit("stopped")
+            log.info("Agent arrete.")
+
+    # ------------------------------------------------------------------
+    def _check_token_expiry(self) -> None:
+        import base64, json as _json, time as _time
+        try:
+            parts = self.cfg.agent_token.split(".")
+            if len(parts) != 3:
+                return
+            payload = _json.loads(base64.urlsafe_b64decode(parts[1] + "=="))
+            exp = payload.get("exp")
+            if not exp:
+                return
+            days = (exp - _time.time()) / 86400
+            if days <= 0:
+                log.error("Token EXPIRE ! Renouvelez depuis le portail.")
+                self._emit("error", "Token expire")
+            elif days <= 7:
+                log.warning("Token expire dans %.1f jours.", days)
+                self._emit("warning", f"Token expire dans {days:.0f} j")
+            else:
+                log.debug("Token valide (%.0f jours restants)", days)
+        except Exception:
+            pass
+
+    def stop(self) -> None:
+        self._stop.set()

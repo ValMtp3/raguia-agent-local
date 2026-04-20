@@ -1,0 +1,26 @@
+# Environnements Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Configuration locale (contient tokens JWT et chemins personnels)
+.raguia_agent/
+raguia_agent.yaml
+
+# Données de l'agent (état local, queue, logs)
+*.log
+raguia_state.json
+raguia_queue.json
+.raguia/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,23 @@
+# Copier vers raguia_agent.yaml (ou définir RAGUIA_AGENT_CONFIG)
+#
+# Jeton agent : voir README.md « Obtenir le jeton agent (JWT) »
+# (POST /api/portal/login puis POST /api/portal/agent/issue-token avec le Bearer portail).
+
+api_base: "http://127.0.0.1:8000"
+client_slug: "mon-client"
+agent_token: "COLLER_ICI_LE_JWT_RENVOYÉ_PAR_issue-token"
+
+# Dossier parent dans lequel le dossier RAGUIA sera créé / surveillé
+watch_parent: "/Users/moi/Documents"
+
+root_folder_name: "RAGUIA"
+
+poll_interval_seconds: 30
+stability_seconds: 2
+
+# Semi-automatique : rafale locale (nombre de fichiers en attente) + cooldown
+sync_cooldown_seconds: 900
+burst_threshold: 20
+max_files_per_cycle: 100
+
+dry_run: false
