@@ -7,10 +7,13 @@ set "API_BASE=%~1"
 set "TOKEN=%~2"
 set "WATCH_PARENT=%~3"
 
-if "%API_BASE%"=="" or "%TOKEN%"=="" (
-    echo Usage: %0 ^<API_BASE^> ^<AGENT_TOKEN^> [WATCH_PARENT]
-    exit /b 1
-)
+if "%API_BASE%"=="" goto usage
+if "%TOKEN%"=="" goto usage
+goto okargs
+:usage
+echo Usage: %~nx0 ^<API_BASE^> ^<AGENT_TOKEN^> [WATCH_PARENT]
+exit /b 1
+:okargs
 
 if "%WATCH_PARENT%"=="" set "WATCH_PARENT=%USERPROFILE%\Documents"
 
@@ -53,31 +56,21 @@ if errorlevel 1 (
 )
 
 echo.
-echo 5. Creation des scripts...
-(
-echo @echo off
-echo cd /d "%%~dp0"
-echo call venv\Scripts\activate.bat
-echo set RAGUIA_AGENT_CONFIG=%%~dps0raguia_agent.yaml
-echo python -m raguia_local_agent
-) > "%AGENT_DIR%\start.bat"
-
-(
-echo @echo off
-echo cd /d "%%~dp0"
-echo call venv\Scripts\activate.bat
-echo set RAGUIA_AGENT_CONFIG=%%~dps0raguia_agent.yaml
-echo python -m raguia_local_agent --test
-) > "%AGENT_DIR%\test.bat"
-
-(
-echo @echo off
-echo taskkill /F /IM python.exe 2^>nul
-echo echo Agent arrete
-) > "%AGENT_DIR%\stop.bat"
+echo 5. Raccourci Demarrage Windows...
+set "RAGUIA_START_BAT=%AGENT_DIR%\start.bat"
+set "RAGUIA_AGENT_DIR=%AGENT_DIR%"
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ws = New-Object -ComObject WScript.Shell; ^
+   $startup = Join-Path ([Environment]::GetFolderPath('Startup')) 'Raguia Agent.lnk'; ^
+   $sc = $ws.CreateShortcut($startup); ^
+   $sc.TargetPath = $env:RAGUIA_START_BAT; ^
+   $sc.WorkingDirectory = $env:RAGUIA_AGENT_DIR.TrimEnd('\'); ^
+   $sc.Save(); ^
+   Write-Host ('Raccourci cree : ' + $startup)"
 
 if not exist "%WATCH_PARENT%\RAGUIA" mkdir "%WATCH_PARENT%\RAGUIA"
 echo.
 echo === Installation terminee! ===
 echo Dossier cible: %WATCH_PARENT%\RAGUIA
+echo Scripts: %AGENT_DIR%\start.bat  test.bat  stop.bat
 endlocal

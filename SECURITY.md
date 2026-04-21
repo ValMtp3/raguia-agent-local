@@ -20,6 +20,7 @@ Nous nous engageons à :
 
 ## Bonnes pratiques
 
+- Le dépôt contient le dossier **`.raguia_agent/`** avec les scripts d’exécution ; en revanche **`raguia_agent.yaml`** et le répertoire **`venv/`** restent **locaux** et ne doivent **pas** être versionnés (jeton et environnement Python).
 - **Ne jamais committer** votre fichier `raguia_agent.yaml` (il contient votre jeton JWT personnel).
 - Regénérer votre jeton depuis le portail si vous pensez qu'il a été compromis.
 - L'agent ne communique qu'avec l'URL configurée dans `raguia_agent.yaml` — vérifiez qu'elle correspond bien à votre portail.

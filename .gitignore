@@ -10,8 +10,11 @@ dist/
 build/
 *.egg
 
-# Configuration locale (contient tokens JWT et chemins personnels)
-.raguia_agent/
+# Dossier .raguia_agent : scripts versionnés ; exclus : venv + config secrète
+.raguia_agent/venv/
+.raguia_agent/raguia_agent.yaml
+
+# Racine du projet (copie locale éventuelle)
 raguia_agent.yaml
 
 # Données de l'agent (état local, queue, logs)

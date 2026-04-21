@@ -35,7 +35,12 @@ Ce jeton est une clé de sécurité unique qui prouve à l'agent qu'il a le droi
 4. Copiez ce long texte, gardez-le sous la main.
 
 ### Étape 2 : Lancer l'assistant d'installation
-Si le programme est déjà installé sur votre ordinateur (via l'équipe technique), il vous suffit de le lancer. S'il n'a jamais été configuré, une fenêtre va s'ouvrir automatiquement.
+Vous pouvez installer l'agent automatiquement depuis notre dépôt public.
+
+1. Téléchargez l'agent (depuis [GitHub](https://github.com/ValMtp3/raguia-agent-local/archive/refs/heads/main.zip) ou via `git clone`).
+2. Ouvrez le dossier téléchargé.
+3. Lancez le script d'installation (`install.bat` sur Windows ou `install.sh` sur Mac/Linux).
+4. S'il n'a jamais été configuré, une fenêtre d'assistant va s'ouvrir automatiquement.
 
 L'assistant va vous poser 3 questions simples :
 1. **URL de votre portail et Jeton** : Collez l'adresse de votre portail (ex: `https://raguia.monentreprise.com`) et le jeton copié à l'étape 1.
@@ -44,7 +49,7 @@ L'assistant va vous poser 3 questions simples :
 
 Et c'est tout ! Cliquez sur "Enregistrer & Démarrer".
 
-*(Note technique pour l'installation brute : installez Python, puis exécutez `pip install 'raguia-local-agent[tray]'` et lancez la commande `raguia-local-agent`)*
+*(Pour les administrateurs : l'installation peut être totalement automatisée en ligne de commande. Voir le fichier `README_ADMIN.md` pour plus de détails).*
 
 ---
 
@@ -82,3 +87,4 @@ Vérifiez d'abord votre connexion internet. Si internet fonctionne, c'est probab
 ---
 
 *L'Agent Raguia a été pensé pour vous faire gagner du temps sans vous poser de questions. Bon travail !*
+ 
