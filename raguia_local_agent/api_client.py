@@ -97,6 +97,18 @@ class PortalApiClient:
         r.raise_for_status()
         return self._parse_json_or_raise(r, "sync-status")
 
+    def delete_local(self, relative_path: str) -> dict[str, Any]:
+        """Met en corbeille sur le portail le document lié à ce chemin relatif."""
+        r = _request_with_retry(
+            "POST",
+            f"{self.api_base}/api/portal/agent/delete-local",
+            headers={**self._headers, "Content-Type": "application/json"},
+            json={"relative_path": relative_path},
+            timeout=60.0,
+        )
+        r.raise_for_status()
+        return self._parse_json_or_raise(r, "delete-local")
+
     def sync_complete(
         self, metrics: Optional[dict[str, Any]] = None, error: Optional[str] = None
     ) -> None:

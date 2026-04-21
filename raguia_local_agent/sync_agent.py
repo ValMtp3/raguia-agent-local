@@ -11,6 +11,7 @@ Scenarios couverts :
 - Token expire                     -> warning/error tray, message clair
 - local_agent_enabled=false        -> arret propre avec message
 - Modifications perdues            -> JAMAIS : on requeue en cas d'echec
+- Suppression locale               -> evenement deleted / corbeille OS -> API delete-local
 """
 
 from __future__ import annotations
@@ -70,6 +71,7 @@ class SyncAgent:
     # Filesystem events
     # ------------------------------------------------------------------
     def _on_fs_event(self, path: Path, kind: str) -> None:
+        path = Path(path)
         if path.suffix.lower() not in self.cfg.supported_extensions:
             return
         if _should_ignore(path):
@@ -78,13 +80,14 @@ class SyncAgent:
             rel = path.relative_to(self.root).as_posix()
         except ValueError:
             return
-        self.queue.enqueue(rel, str(path), kind)
+        abs_ref = str(path) if kind != "deleted" else str(self.root / rel)
+        self.queue.enqueue(rel, abs_ref, kind)
 
     # ------------------------------------------------------------------
     # Cycle de synchronisation
     # ------------------------------------------------------------------
     def run_cycle(self, reason: str) -> dict:
-        metrics: dict = {"reason": reason, "uploaded": 0, "errors": []}
+        metrics: dict = {"reason": reason, "uploaded": 0, "deleted": 0, "errors": []}
         batch = self.queue.pop_batch(
             self.cfg.max_files_per_cycle,
             min_age_seconds=self.cfg.stability_seconds,
@@ -92,11 +95,54 @@ class SyncAgent:
         if not batch:
             return metrics
 
+        delete_items = [
+            i for i in batch if (i.get("event_type") or "modified") == "deleted"
+        ]
+        upload_items = [
+            i for i in batch if (i.get("event_type") or "modified") != "deleted"
+        ]
+
         self._emit("syncing")
+
+        for item in delete_items:
+            rel = item["rel_path"]
+            try:
+                if self.cfg.dry_run:
+                    log.info("dry-run : mettrait en corbeille sur le portail : %s", rel)
+                    self.queue.mark_done(rel)
+                    self.store.remove_rel(rel)
+                    metrics["deleted"] += 1
+                    continue
+                res = self.client.delete_local(rel)
+                if res.get("status") in ("trashed", "not_found"):
+                    self.queue.mark_done(rel)
+                    self.store.remove_rel(rel)
+                    metrics["deleted"] += 1
+                    if res.get("status") == "not_found":
+                        log.info(
+                            "Suppression locale : aucun document distant pour %s (deja absent ?)",
+                            rel,
+                        )
+                else:
+                    raise ValueError(f"reponse inattendue : {res!r}")
+            except Exception as e:
+                log.exception("Suppression distante impossible pour %s", rel)
+                self.queue.mark_error(rel, str(e))
+                metrics["errors"].append(str(e))
+
+        if delete_items:
+            self.store.save()
+            if metrics["deleted"]:
+                log.info(
+                    "Cycle '%s' : %d suppression(s) reportee(s) au portail",
+                    reason,
+                    metrics["deleted"],
+                )
+
         paths_ok: list[Path] = []
         metas_ok: list[dict] = []
 
-        for item in batch:
+        for item in upload_items:
             rel = item["rel_path"]
             p = Path(item["abs_path"])
 
@@ -214,6 +260,7 @@ class SyncAgent:
 
                 # --- Evaluer si on doit syncer ---
                 pending   = self.queue.pending_count()
+                pending_delete = self.queue.pending_delete_count()
                 stuck     = self.queue.stuck_count()
                 cooldown_ok = (time.time() - last_cooldown_ts) >= self.cfg.sync_cooldown_seconds
                 burst     = pending >= self.cfg.burst_threshold
@@ -225,6 +272,8 @@ class SyncAgent:
                     reason = "server_request"
                 elif force:
                     reason = "force"
+                elif pending_delete > 0:
+                    reason = "local_delete"
                 elif cooldown_ok and burst:
                     reason = "local_burst"
 

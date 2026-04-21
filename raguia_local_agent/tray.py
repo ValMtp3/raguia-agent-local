@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import os
 import json
-import shlex
 import shutil
 import subprocess
 import sys
@@ -26,6 +25,8 @@ from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
     from .sync_agent import SyncAgent
+
+from . import tray_dialogs
 
 _COLORS = {
     "idle":    "#22c55e",   # vert
@@ -147,97 +148,67 @@ class RaguiaTray:
 
         def update_jwt(icon, item):
             try:
-                import tkinter as tk
-                from tkinter import messagebox, simpledialog
                 import yaml
             except Exception:
-                self._on_agent_status(TrayStatus.ERROR, "UI JWT indisponible")
+                self._on_agent_status(TrayStatus.ERROR, "PyYAML indisponible")
                 return
 
-            root = tk.Tk()
-            root.withdraw()
+            new_token = tray_dialogs.prompt_agent_token()
+            if new_token is None:
+                return
+            new_token = new_token.strip()
+            if not new_token:
+                tray_dialogs.show_message(
+                    "Jeton vide",
+                    "Aucun jeton saisi.",
+                    kind="warning",
+                )
+                return
+
+            old_token = self._agent.cfg.agent_token
+            self._agent.update_agent_token(new_token)
             try:
-                new_token = simpledialog.askstring(
-                    "Raguia — Mettre a jour le jeton",
-                    "Collez le nouveau jeton JWT agent :",
-                    show="*",
-                    parent=root,
+                self._agent.client.sync_status()
+            except Exception as e:
+                self._agent.update_agent_token(old_token)
+                tray_dialogs.show_message(
+                    "Jeton invalide",
+                    f"Le jeton n'a pas ete accepte:\n{e}",
+                    kind="error",
                 )
-                if new_token is None:
-                    return
-                new_token = new_token.strip()
-                if not new_token:
-                    messagebox.showwarning("Jeton vide", "Aucun jeton saisi.", parent=root)
-                    return
+                return
 
-                old_token = self._agent.cfg.agent_token
-                self._agent.update_agent_token(new_token)
-                try:
-                    # Validation immediate
-                    self._agent.client.sync_status()
-                except Exception as e:
-                    self._agent.update_agent_token(old_token)
-                    messagebox.showerror(
-                        "Jeton invalide",
-                        f"Le jeton n'a pas ete accepte:\n{e}",
-                        parent=root,
-                    )
-                    return
+            cfg_path = os.environ.get("RAGUIA_AGENT_CONFIG")
+            if cfg_path:
+                cfg_file = Path(cfg_path)
+            else:
+                cfg_file = Path.home() / ".raguia" / "config.yaml"
+            cfg_file.parent.mkdir(parents=True, exist_ok=True)
 
-                cfg_path = os.environ.get("RAGUIA_AGENT_CONFIG")
-                if cfg_path:
-                    cfg_file = Path(cfg_path)
-                else:
-                    cfg_file = Path.home() / ".raguia" / "config.yaml"
-                cfg_file.parent.mkdir(parents=True, exist_ok=True)
+            data = {}
+            if cfg_file.is_file():
+                with open(cfg_file, encoding="utf-8") as f:
+                    data = yaml.safe_load(f) or {}
+            data["agent_token"] = new_token
+            with open(cfg_file, "w", encoding="utf-8") as f:
+                yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+            try:
+                os.chmod(cfg_file, 0o600)
+            except Exception:
+                pass
 
-                data = {}
-                if cfg_file.is_file():
-                    with open(cfg_file, encoding="utf-8") as f:
-                        data = yaml.safe_load(f) or {}
-                data["agent_token"] = new_token
-                with open(cfg_file, "w", encoding="utf-8") as f:
-                    yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
-                try:
-                    os.chmod(cfg_file, 0o600)
-                except Exception:
-                    pass
-
-                messagebox.showinfo(
-                    "Jeton mis a jour",
-                    "Le nouveau jeton est actif immediatement et enregistre.",
-                    parent=root,
-                )
-                self._on_agent_status(TrayStatus.IDLE, "Jeton mis a jour")
-            finally:
-                root.destroy()
+            tray_dialogs.show_message(
+                "Jeton mis a jour",
+                "Le nouveau jeton est actif immediatement et enregistre.",
+                kind="info",
+            )
+            self._on_agent_status(TrayStatus.IDLE, "Jeton mis a jour")
 
         def uninstall_agent(icon, item):
-            try:
-                import tkinter as tk
-                from tkinter import messagebox
-            except Exception:
-                self._on_agent_status(TrayStatus.ERROR, "UI desinstallation indisponible")
+            if not tray_dialogs.confirm_uninstall():
                 return
 
-            root = tk.Tk()
-            root.withdraw()
             try:
-                ok = messagebox.askyesno(
-                    "Raguia — Desinstallation",
-                    (
-                        "Confirmer la desinstallation complete de l'agent ?\n\n"
-                        "- Arret de l'agent\n"
-                        "- Suppression du demarrage automatique\n"
-                        "- Suppression des fichiers agent/config locaux\n\n"
-                        "Le dossier de documents RAGUIA n'est pas supprime."
-                    ),
-                    icon="warning",
-                    parent=root,
-                )
-                if not ok:
-                    return
-
                 cfg_path = os.environ.get("RAGUIA_AGENT_CONFIG")
                 cfg_file = Path(cfg_path) if cfg_path else (Path.home() / ".raguia" / "config.yaml")
                 agent_dirs: list[Path] = []
@@ -258,9 +229,9 @@ class RaguiaTray:
                     elif sys.platform == "darwin":
                         plist = Path.home() / "Library" / "LaunchAgents" / "com.raguia.local.agent.plist"
                         uid = str(os.getuid()) if hasattr(os, "getuid") else ""
-                        if uid:
+                        if uid and plist.is_file():
                             subprocess.run(
-                                ["launchctl", "bootout", f"gui/{uid}/com.raguia.local.agent"],
+                                ["launchctl", "bootout", f"gui/{uid}", str(plist)],
                                 check=False,
                                 stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL,
@@ -271,14 +242,14 @@ class RaguiaTray:
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                         )
-                        subprocess.run(
-                            ["launchctl", "unload", str(plist)],
-                            check=False,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                        )
-                        if plist.exists():
-                            plist.unlink()
+                        if plist.is_file():
+                            subprocess.run(
+                                ["launchctl", "unload", str(plist)],
+                                check=False,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                            )
+                            plist.unlink(missing_ok=True)
                     else:
                         unit = Path.home() / ".config" / "systemd" / "user" / "raguia-agent.service"
                         if shutil.which("systemctl"):
@@ -329,20 +300,18 @@ class RaguiaTray:
                         **kwargs,
                     )
 
-                messagebox.showinfo(
+                tray_dialogs.show_message(
                     "Desinstallation",
                     "Desinstallation lancee. L'agent va s'arreter.",
-                    parent=root,
+                    kind="info",
                 )
                 quit_agent(icon, item)
             except Exception as e:
-                messagebox.showerror(
+                tray_dialogs.show_message(
                     "Erreur desinstallation",
                     f"La desinstallation a echoue:\n{e}",
-                    parent=root,
+                    kind="error",
                 )
-            finally:
-                root.destroy()
 
         pending = self._agent.queue.pending_count()
         stuck   = self._agent.queue.stuck_count()

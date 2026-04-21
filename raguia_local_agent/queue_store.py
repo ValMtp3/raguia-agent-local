@@ -47,6 +47,7 @@ class QueueStore:
         conn = self._conn()
         conn.executescript(_SCHEMA)
         conn.commit()
+        self._ensure_event_type_column()
 
     # ------------------------------------------------------------------
     # Connexion par thread (SQLite n'est pas multi-thread safe en mode shared)
@@ -62,6 +63,16 @@ class QueueStore:
             self._local.conn.execute("PRAGMA journal_mode=WAL")
             self._local.conn.execute("PRAGMA synchronous=NORMAL")
         return self._local.conn
+
+    def _ensure_event_type_column(self) -> None:
+        """Migration legere : anciennes queue.db sans colonne event_type."""
+        conn = self._conn()
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(queue)")}
+        if "event_type" not in cols:
+            conn.execute(
+                "ALTER TABLE queue ADD COLUMN event_type TEXT NOT NULL DEFAULT 'modified'"
+            )
+            conn.commit()
 
     # ------------------------------------------------------------------
     # API publique
@@ -91,16 +102,23 @@ class QueueStore:
     ) -> list[dict]:
         """Retourne un lot de fichiers stables (age >= min_age_seconds) et incremente attempts."""
         conn = self._conn()
-        cutoff = time.time() - min_age_seconds
+        now = time.time()
+        cutoff_normal = now - min_age_seconds
+        cutoff_delete = now - 0.5
         rows = conn.execute(
             """
             SELECT rel_path, abs_path, event_type, queued_at, attempts
             FROM queue
-            WHERE attempts < ? AND queued_at <= ?
-            ORDER BY queued_at
+            WHERE attempts < ? AND (
+                (COALESCE(event_type, 'modified') = 'deleted' AND queued_at <= ?)
+                OR (COALESCE(event_type, 'modified') <> 'deleted' AND queued_at <= ?)
+            )
+            ORDER BY
+                CASE WHEN COALESCE(event_type, 'modified') = 'deleted' THEN 0 ELSE 1 END,
+                queued_at
             LIMIT ?
             """,
-            (max_attempts, cutoff, max_n),
+            (max_attempts, cutoff_delete, cutoff_normal, max_n),
         ).fetchall()
         if not rows:
             return []
@@ -139,6 +157,11 @@ class QueueStore:
 
     def pending_count(self) -> int:
         return self._conn().execute("SELECT COUNT(*) FROM queue").fetchone()[0]
+
+    def pending_delete_count(self) -> int:
+        return self._conn().execute(
+            "SELECT COUNT(*) FROM queue WHERE COALESCE(event_type, 'modified') = 'deleted'"
+        ).fetchone()[0]
 
     def stuck_count(self, max_attempts: int = _MAX_ATTEMPTS) -> int:
         """Fichiers bloques (trop de tentatives) - souvent Word/Excel verrouillesou fichiers corrompus."""

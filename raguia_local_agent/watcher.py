@@ -82,9 +82,31 @@ class _Handler(FileSystemEventHandler):
             self._dispatch_path(event.src_path, "modified")
 
     def on_moved(self, event) -> None:  # type: ignore[no-untyped-def]
+        if event.is_directory:
+            return
+        src = Path(event.src_path)
+        dest = Path(event.dest_path)
+        try:
+            src.relative_to(self.root)
+            src_in = True
+        except ValueError:
+            src_in = False
+        if not src_in:
+            return
+        try:
+            dest.relative_to(self.root)
+            dest_in = True
+        except ValueError:
+            dest_in = False
+        if not dest_in:
+            # Corbeille, autre volume, etc. : le fichier n'est plus sous RAGUIA
+            self._dispatch_path(str(src), "deleted")
+            return
+        self._dispatch_path(event.dest_path, "moved")
+
+    def on_deleted(self, event) -> None:  # type: ignore[no-untyped-def]
         if not event.is_directory:
-            # Ignorer si la destination est un fichier temporaire
-            self._dispatch_path(event.dest_path, "moved")
+            self._dispatch_path(event.src_path, "deleted")
 
 
 def start_observer(

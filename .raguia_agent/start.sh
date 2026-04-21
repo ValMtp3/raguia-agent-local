@@ -12,4 +12,10 @@ fi
 
 source venv/bin/activate
 export RAGUIA_AGENT_CONFIG="$(pwd)/raguia_agent.yaml"
+
+# Garantit la presence des deps tray (pystray/Pillow) pour l'icone macOS.
+if ! python3 -c "import pystray, PIL" >/dev/null 2>&1; then
+  python3 -m pip install -e "..[tray]" || exit 1
+fi
+
 python3 -m raguia_local_agent

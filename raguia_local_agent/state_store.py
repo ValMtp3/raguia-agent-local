@@ -149,9 +149,17 @@ class StateStore:
             rel = abs_path.relative_to(root).as_posix()
         except ValueError:
             return
+        self.remove_rel(rel)
+
+    def remove_rel(self, rel: str) -> None:
+        """Retire un chemin relatif du registre (fichier supprimé ou poubelle distante)."""
+        rel = rel.replace("\\", "/").strip().strip("/")
+        if not rel:
+            return
         with self._lock:
-            if rel in self.state.files:
-                ext = self.state.files[rel].external_id
-                del self.state.files[rel]
-                if self.state.by_external.get(ext) == rel:
-                    del self.state.by_external[ext]
+            if rel not in self.state.files:
+                return
+            ext = self.state.files[rel].external_id
+            del self.state.files[rel]
+            if self.state.by_external.get(ext) == rel:
+                del self.state.by_external[ext]

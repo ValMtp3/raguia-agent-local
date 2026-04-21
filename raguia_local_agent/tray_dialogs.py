@@ -1,0 +1,134 @@
+"""Dialogues Tk dans un processus separe — requis sur macOS (callbacks pystray / AppKit).
+
+Sans cela, askstring / messagebox depuis le thread du menu ne s'affichent pas ou ne reagissent pas.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+log = logging.getLogger(__name__)
+
+
+def _run_tk_subprocess(code: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        env={**os.environ, "TK_SILENCE_DEPRECATION": "1", "PYTHONUTF8": "1"},
+        timeout=600,
+        capture_output=True,
+        text=True,
+    )
+
+
+def prompt_agent_token() -> str | None:
+    """Demande le jeton JWT (masque). Retourne None si annule ou vide."""
+    out_path = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
+    out_path.close()
+    path = out_path.name
+    try:
+        script = (
+            "import sys\n"
+            "import tkinter as tk\n"
+            "from tkinter import simpledialog\n"
+            "root = tk.Tk()\n"
+            "root.withdraw()\n"
+            "try:\n"
+            "    root.lift()\n"
+            "    root.attributes('-topmost', True)\n"
+            "    root.update_idletasks()\n"
+            "except Exception:\n"
+            "    pass\n"
+            "try:\n"
+            "    t = simpledialog.askstring(\n"
+            "        'Raguia — Mettre a jour le jeton',\n"
+            "        'Collez le nouveau jeton JWT agent :',\n"
+            "        show='*',\n"
+            "        parent=root,\n"
+            "    )\n"
+            "finally:\n"
+            "    root.destroy()\n"
+            f"with open({path!r}, 'w', encoding='utf-8') as f:\n"
+            "    f.write((t or '').strip())\n"
+        )
+        r = _run_tk_subprocess(script)
+        if r.returncode != 0:
+            log.warning(
+                "prompt_agent_token: code=%s stderr=%s",
+                r.returncode,
+                (r.stderr or "")[:500],
+            )
+        raw = Path(path).read_text(encoding="utf-8").strip()
+        return raw if raw else None
+    except Exception as e:
+        log.exception("prompt_agent_token: %s", e)
+        return None
+    finally:
+        try:
+            Path(path).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def show_message(title: str, message: str, *, kind: str = "info") -> None:
+    """kind: info | warning | error"""
+    fn = {"info": "showinfo", "warning": "showwarning", "error": "showerror"}.get(
+        kind, "showinfo"
+    )
+    script = (
+        "import tkinter as tk\n"
+        "from tkinter import messagebox\n"
+        "root = tk.Tk()\n"
+        "root.withdraw()\n"
+        "try:\n"
+        "    root.lift()\n"
+        "    root.attributes('-topmost', True)\n"
+        "except Exception:\n"
+        "    pass\n"
+        "try:\n"
+        f"    messagebox.{fn}({title!r}, {message!r}, parent=root)\n"
+        "finally:\n"
+        "    root.destroy()\n"
+    )
+    try:
+        r = _run_tk_subprocess(script)
+        if r.returncode != 0:
+            log.warning("show_message: %s", (r.stderr or "")[:300])
+    except Exception as e:
+        log.exception("show_message: %s", e)
+
+
+def confirm_uninstall() -> bool:
+    body = (
+        "Confirmer la desinstallation complete de l'agent ?\n\n"
+        "- Arret de l'agent\n"
+        "- Suppression du demarrage automatique\n"
+        "- Suppression des fichiers agent/config locaux\n\n"
+        "Le dossier de documents RAGUIA n'est pas supprime."
+    )
+    script = (
+        "import tkinter as tk\n"
+        "from tkinter import messagebox\n"
+        "root = tk.Tk()\n"
+        "root.withdraw()\n"
+        "try:\n"
+        "    root.lift()\n"
+        "    root.attributes('-topmost', True)\n"
+        "except Exception:\n"
+        "    pass\n"
+        "try:\n"
+        f"    ok = messagebox.askyesno({repr('Raguia — Desinstallation')}, {repr(body)}, parent=root, icon='warning')\n"
+        "finally:\n"
+        "    root.destroy()\n"
+        "print('1' if ok else '0')\n"
+    )
+    try:
+        r = _run_tk_subprocess(script)
+        return (r.stdout or "").strip() == "1"
+    except Exception as e:
+        log.exception("confirm_uninstall: %s", e)
+        return False
