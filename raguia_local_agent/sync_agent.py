@@ -16,6 +16,7 @@ Scenarios couverts :
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from pathlib import Path
@@ -209,6 +210,8 @@ class SyncAgent:
                     self._stop.wait(self.cfg.poll_interval_seconds)
                     continue
 
+                self._apply_remote_deletions(st)
+
                 # --- Evaluer si on doit syncer ---
                 pending   = self.queue.pending_count()
                 stuck     = self.queue.stuck_count()
@@ -276,6 +279,46 @@ class SyncAgent:
                 log.debug("Token valide (%.0f jours restants)", days)
         except Exception:
             pass
+
+    def _apply_remote_deletions(self, st: dict) -> None:
+        """Supprime localement les fichiers mis en corbeille depuis le portail."""
+        deletions = st.get("remote_deletions")
+        if not isinstance(deletions, list) or not deletions:
+            return
+
+        deleted = 0
+        failed = 0
+        for item in deletions:
+            if not isinstance(item, dict):
+                continue
+            rel = (item.get("relative_path") or "").strip()
+            if not rel:
+                continue
+            try:
+                target = (self.root / rel).resolve()
+                target.relative_to(self.root.resolve())
+            except Exception:
+                log.warning("Suppression distante ignoree (chemin invalide): %s", rel)
+                continue
+
+            try:
+                if target.exists() and target.is_file():
+                    os.remove(target)
+                    deleted += 1
+                    log.info("Suppression locale (depuis portail): %s", rel)
+                # Nettoyer queue + registre local, meme si deja absent
+                self.queue.mark_done(rel)
+                self.store.remove_path(self.root, target)
+            except Exception as e:
+                failed += 1
+                log.warning("Suppression locale impossible pour %s : %s", rel, e)
+
+        if deleted or failed:
+            self.store.save()
+            if failed == 0:
+                self._emit("warning", f"{deleted} suppression(s) appliquee(s)")
+            else:
+                self._emit("warning", f"{deleted} suppr. OK, {failed} echec(s)")
 
     def stop(self) -> None:
         self._stop.set()

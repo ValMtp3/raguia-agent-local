@@ -13,7 +13,9 @@ Necessite : pystray>=0.19, Pillow>=10
 from __future__ import annotations
 
 import os
+import json
 import shlex
+import shutil
 import subprocess
 import sys
 import threading
@@ -238,7 +240,12 @@ class RaguiaTray:
 
                 cfg_path = os.environ.get("RAGUIA_AGENT_CONFIG")
                 cfg_file = Path(cfg_path) if cfg_path else (Path.home() / ".raguia" / "config.yaml")
-                agent_dir = cfg_file.parent if cfg_file.name == "raguia_agent.yaml" else None
+                agent_dirs: list[Path] = []
+                if cfg_file.name == "raguia_agent.yaml":
+                    agent_dirs.append(cfg_file.parent)
+                cwd = Path.cwd()
+                if (cwd / "raguia_agent.yaml").is_file():
+                    agent_dirs.append(cwd)
                 app_data_dir = Path.home() / ".raguia"
 
                 # 1) Desactiver le demarrage automatique selon l'OS
@@ -250,37 +257,76 @@ class RaguiaTray:
                             lnk.unlink()
                     elif sys.platform == "darwin":
                         plist = Path.home() / "Library" / "LaunchAgents" / "com.raguia.local.agent.plist"
+                        uid = str(os.getuid()) if hasattr(os, "getuid") else ""
+                        if uid:
+                            subprocess.run(
+                                ["launchctl", "bootout", f"gui/{uid}/com.raguia.local.agent"],
+                                check=False,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                            )
                         subprocess.run(
-                            ["/bin/bash", "-lc", f'launchctl bootout "gui/$(id -u)" "{plist}" 2>/dev/null || launchctl unload "{plist}" 2>/dev/null || true'],
+                            ["launchctl", "remove", "com.raguia.local.agent"],
                             check=False,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                        subprocess.run(
+                            ["launchctl", "unload", str(plist)],
+                            check=False,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
                         )
                         if plist.exists():
                             plist.unlink()
                     else:
                         unit = Path.home() / ".config" / "systemd" / "user" / "raguia-agent.service"
-                        subprocess.run(["systemctl", "--user", "disable", "--now", "raguia-agent.service"], check=False)
-                        subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+                        if shutil.which("systemctl"):
+                            subprocess.run(["systemctl", "--user", "disable", "--now", "raguia-agent.service"], check=False)
+                            subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
                         if unit.exists():
                             unit.unlink()
                 except Exception:
                     pass
 
                 # 2) Programmer la suppression des fichiers apres extinction du process
-                to_delete = []
-                if agent_dir and agent_dir.name == ".raguia_agent":
-                    to_delete.append(agent_dir)
+                to_delete: list[Path] = []
+                for d in agent_dirs:
+                    if d.name == ".raguia_agent":
+                        to_delete.append(d)
                 to_delete.append(app_data_dir)
+                # dedupe + keep only existing
+                norm = []
+                seen = set()
+                for p in to_delete:
+                    try:
+                        rp = p.resolve()
+                    except Exception:
+                        rp = p
+                    key = str(rp)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    if p.exists():
+                        norm.append(p)
 
-                if os.name == "nt":
-                    quoted = " ".join(f'"{p}"' for p in to_delete)
-                    cmd = f'timeout /t 2 /nobreak >nul & for %d in ({quoted}) do if exist "%d" rmdir /s /q "%d"'
-                    subprocess.Popen(["cmd", "/c", cmd], creationflags=0x08000000)
-                else:
-                    quoted = " ".join(shlex.quote(str(p)) for p in to_delete)
+                if norm:
+                    cleanup_script = (
+                        "import json, os, shutil, sys, time; "
+                        "time.sleep(2); "
+                        "paths=json.loads(sys.argv[1]); "
+                        "[(shutil.rmtree(p, ignore_errors=True) if os.path.isdir(p) "
+                        "else (os.remove(p) if os.path.exists(p) else None)) for p in paths]"
+                    )
+                    kwargs = {
+                        "stdout": subprocess.DEVNULL,
+                        "stderr": subprocess.DEVNULL,
+                    }
+                    if os.name == "nt":
+                        kwargs["creationflags"] = 0x08000000
                     subprocess.Popen(
-                        ["/bin/bash", "-lc", f"sleep 2; rm -rf {quoted}"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
+                        [sys.executable, "-c", cleanup_script, json.dumps([str(p) for p in norm])],
+                        **kwargs,
                     )
 
                 messagebox.showinfo(
@@ -289,6 +335,12 @@ class RaguiaTray:
                     parent=root,
                 )
                 quit_agent(icon, item)
+            except Exception as e:
+                messagebox.showerror(
+                    "Erreur desinstallation",
+                    f"La desinstallation a echoue:\n{e}",
+                    parent=root,
+                )
             finally:
                 root.destroy()
 

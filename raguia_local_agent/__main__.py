@@ -8,10 +8,47 @@ import os
 import sys
 import threading
 from pathlib import Path
+from typing import Optional
 
 from .api_client import PortalApiClient
-from .config import AgentConfig, is_first_launch, load_config
+from .config import APP_DATA_DIR, AgentConfig, is_first_launch, load_config
 from .sync_agent import SyncAgent
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Le process existe mais appartient a un autre utilisateur.
+        return True
+    except Exception:
+        return False
+    return True
+
+
+def _acquire_single_instance_lock() -> tuple[bool, Optional[Path]]:
+    """Empêche plusieurs instances locales simultanees.
+
+    Retourne (ok, lock_path). Si ok=False, une autre instance est deja active.
+    """
+    APP_DATA_DIR.mkdir(mode=0o700, exist_ok=True)
+    lock_path = APP_DATA_DIR / "agent.pid"
+    current_pid = os.getpid()
+
+    if lock_path.exists():
+        try:
+            existing_pid = int(lock_path.read_text(encoding="utf-8").strip() or "0")
+        except Exception:
+            existing_pid = 0
+        if existing_pid and _pid_is_running(existing_pid):
+            return False, None
+
+    lock_path.write_text(str(current_pid), encoding="utf-8")
+    return True, lock_path
 
 
 def test_connection(cfg: AgentConfig) -> bool:
@@ -73,43 +110,64 @@ def main() -> None:
     cfg_path = Path(args.config) if args.config else None
     cfg = _run_wizard_if_needed(cfg_path)
 
-    if args.test:
-        if not cfg.agent_token:
-            print("Erreur : agent_token manquant")
-            sys.exit(1)
-        sys.exit(0 if test_connection(cfg) else 1)
-
-    if not cfg.agent_token:
-        logging.error(
-            "Jeton agent manquant. Lancez 'raguia-local-agent' sans argument "
-            "pour ouvrir l'assistant, ou definissez RAGUIA_AGENT_TOKEN."
-        )
-        sys.exit(1)
-
-    agent = SyncAgent(cfg)
-
-    # --- Mode sans tray (serveur / terminal) ---
-    if args.no_tray:
-        try:
-            agent.run_forever()
-        except KeyboardInterrupt:
-            agent.stop()
-        return
-
-    # --- Mode avec tray (macOS : tray dans main thread, agent en daemon) ---
-    t = threading.Thread(target=agent.run_forever, daemon=True, name="raguia-agent")
-    t.start()
+    lock_path: Optional[Path] = None
+    lock_ok, lock_path = _acquire_single_instance_lock()
+    if not lock_ok:
+        print("Agent deja en cours d'execution (icone tray deja active).")
+        sys.exit(0)
 
     try:
-        from .tray import RaguiaTray
-        tray = RaguiaTray(agent, on_quit=agent.stop)
-        tray.run()          # bloque dans le thread principal (requis sur macOS)
-    except ImportError:
-        logging.info("pystray/Pillow non disponible — mode sans tray. Ctrl+C pour arreter.")
+        if args.test:
+            if not cfg.agent_token:
+                print("Erreur : agent_token manquant")
+                sys.exit(1)
+            sys.exit(0 if test_connection(cfg) else 1)
+
+        if not cfg.agent_token:
+            logging.error(
+                "Jeton agent manquant. Lancez 'raguia-local-agent' sans argument "
+                "pour ouvrir l'assistant, ou definissez RAGUIA_AGENT_TOKEN."
+            )
+            sys.exit(1)
+
+        agent = SyncAgent(cfg)
+
         try:
-            t.join()
-        except KeyboardInterrupt:
+            # --- Mode sans tray (serveur / terminal) ---
+            if args.no_tray:
+                try:
+                    agent.run_forever()
+                except KeyboardInterrupt:
+                    agent.stop()
+                return
+
+            # --- Mode avec tray (macOS : tray dans main thread, agent en daemon) ---
+            t = threading.Thread(target=agent.run_forever, daemon=True, name="raguia-agent")
+            t.start()
+
+            try:
+                from .tray import RaguiaTray
+                tray = RaguiaTray(agent, on_quit=agent.stop)
+                tray.run()          # bloque dans le thread principal (requis sur macOS)
+            except ImportError:
+                logging.info("pystray/Pillow non disponible — mode sans tray. Ctrl+C pour arreter.")
+                try:
+                    t.join()
+                except KeyboardInterrupt:
+                    agent.stop()
+        finally:
             agent.stop()
+    finally:
+        if lock_path and lock_path.exists():
+            try:
+                lock_pid = int(lock_path.read_text(encoding="utf-8").strip() or "0")
+            except Exception:
+                lock_pid = 0
+            if lock_pid == os.getpid():
+                try:
+                    lock_path.unlink()
+                except Exception:
+                    pass
 
 
 if __name__ == "__main__":
