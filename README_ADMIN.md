@@ -25,6 +25,11 @@ Ouvrez le terminal dans le dossier téléchargé et exécutez la commande avec v
 ./install.sh "https://raguia.client-domaine.com" "VOTRE_JETON_SAAS" "/chemin/vers/dossier/cible"
 ```
 Vous pouvez aussi lancer simplement `./install.sh` : le script vous pose les questions en CLI (URL, jeton JWT, dossier parent).
+Par défaut, l’URL proposée est `https://raguia.valentin-fiess.fr` (prod).  
+Pour forcer un setup local, passez `local` en 4e argument :
+```bash
+./install.sh "" "" "" local
+```
 
 #### Windows
 Ouvrez PowerShell ou l'Invite de commandes dans le dossier téléchargé et exécutez :
@@ -32,6 +37,11 @@ Ouvrez PowerShell ou l'Invite de commandes dans le dossier téléchargé et exé
 .\install.bat "https://raguia.client-domaine.com" "VOTRE_JETON_SAAS" "C:\chemin\vers\dossier\cible"
 ```
 Vous pouvez aussi lancer simplement `.\install.bat` : le script vous guide en CLI et demande les champs manquants.
+Par défaut, l’URL proposée est `https://raguia.valentin-fiess.fr` (prod).  
+Pour forcer un setup local :
+```powershell
+.\install.bat "" "" "" local
+```
 
 Le dossier **`.raguia_agent/`** est **fourni dans le dépôt** (scripts shell / batch). L’installation y ajoute ce qui est local à la machine : **`venv/`** (Python) et **`raguia_agent.yaml`** (jeton, chemins), non versionnés. Tant que **`install.sh`** ou **`install.bat`** n’a pas été exécuté, **`start`** ne peut pas fonctionner (pas de venv ni de configuration valide).
 

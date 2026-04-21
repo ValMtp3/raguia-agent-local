@@ -13,9 +13,20 @@ echo -e "${YELLOW}=== Installation Agent RAGUIA ===${NC}"
 API_BASE="${1:-}"
 TOKEN="${2:-}"
 WATCH_PARENT="${3:-}"
+RUNTIME_ENV="${4:-prod}"
+DEFAULT_API_PROD="https://raguia.valentin-fiess.fr"
+DEFAULT_API_LOCAL="http://localhost:5173"
+
+if [[ "$RUNTIME_ENV" == "local" ]]; then
+    DEFAULT_API_BASE="$DEFAULT_API_LOCAL"
+else
+    RUNTIME_ENV="prod"
+    DEFAULT_API_BASE="$DEFAULT_API_PROD"
+fi
 
 if [[ -z "$API_BASE" ]]; then
-    read -r -p "URL du portail (ex: https://raguia.mondomaine.com): " API_BASE
+    read -r -p "URL du portail (defaut: $DEFAULT_API_BASE): " API_BASE
+    API_BASE="${API_BASE:-$DEFAULT_API_BASE}"
 fi
 if [[ -z "$TOKEN" ]]; then
     read -r -s -p "Jeton JWT agent: " TOKEN
@@ -23,7 +34,7 @@ if [[ -z "$TOKEN" ]]; then
 fi
 if [[ -z "$API_BASE" || -z "$TOKEN" ]]; then
     echo -e "${RED}API_BASE et AGENT_TOKEN sont obligatoires.${NC}"
-    echo "Usage: $0 <API_BASE> <AGENT_TOKEN> [WATCH_PARENT]"
+    echo "Usage: $0 [API_BASE] [AGENT_TOKEN] [WATCH_PARENT] [prod|local]"
     exit 1
 fi
 
@@ -116,6 +127,7 @@ api_base: "$API_BASE"
 agent_token: "$TOKEN"
 watch_parent: "$WATCH_PARENT"
 root_folder_name: "RAGUIA"
+runtime_env: "$RUNTIME_ENV"
 EOF
 
 echo -e "\n${GREEN}3. Installation des dépendances...${NC}"

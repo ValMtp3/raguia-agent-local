@@ -6,9 +6,22 @@ echo === Installation Agent RAGUIA ===
 set "API_BASE=%~1"
 set "TOKEN=%~2"
 set "WATCH_PARENT=%~3"
+set "RUNTIME_ENV=%~4"
+set "DEFAULT_API_PROD=https://raguia.valentin-fiess.fr"
+set "DEFAULT_API_LOCAL=http://localhost:5173"
+
+if /I "%RUNTIME_ENV%"=="local" (
+  set "DEFAULT_API_BASE=%DEFAULT_API_LOCAL%"
+) else (
+  set "RUNTIME_ENV=prod"
+  set "DEFAULT_API_BASE=%DEFAULT_API_PROD%"
+)
 
 if "%API_BASE%"=="" (
-  set /p API_BASE=URL du portail (ex: https://raguia.mondomaine.com): 
+  set /p API_BASE=URL du portail (defaut: %DEFAULT_API_BASE%): 
+)
+if "%API_BASE%"=="" (
+  set "API_BASE=%DEFAULT_API_BASE%"
 )
 if "%TOKEN%"=="" (
   set /p TOKEN=Jeton JWT agent: 
@@ -17,7 +30,7 @@ if "%API_BASE%"=="" goto usage
 if "%TOKEN%"=="" goto usage
 goto okargs
 :usage
-echo Usage: %~nx0 ^<API_BASE^> ^<AGENT_TOKEN^> [WATCH_PARENT]
+echo Usage: %~nx0 [API_BASE] [AGENT_TOKEN] [WATCH_PARENT] [prod^|local]
 exit /b 1
 :okargs
 
@@ -46,6 +59,7 @@ echo api_base: "%API_BASE%"
 echo agent_token: "%TOKEN%"
 echo watch_parent: "%WATCH_PARENT%"
 echo root_folder_name: "RAGUIA"
+echo runtime_env: "%RUNTIME_ENV%"
 ) > "%AGENT_DIR%\raguia_agent.yaml"
 
 echo.
