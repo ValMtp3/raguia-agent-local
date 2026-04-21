@@ -12,6 +12,10 @@ Necessite : pystray>=0.19, Pillow>=10
 
 from __future__ import annotations
 
+import os
+import shlex
+import subprocess
+import sys
 import threading
 import time
 from enum import Enum
@@ -139,6 +143,155 @@ class RaguiaTray:
                 self._on_quit()
             icon.stop()
 
+        def update_jwt(icon, item):
+            try:
+                import tkinter as tk
+                from tkinter import messagebox, simpledialog
+                import yaml
+            except Exception:
+                self._on_agent_status(TrayStatus.ERROR, "UI JWT indisponible")
+                return
+
+            root = tk.Tk()
+            root.withdraw()
+            try:
+                new_token = simpledialog.askstring(
+                    "Raguia — Mettre a jour le jeton",
+                    "Collez le nouveau jeton JWT agent :",
+                    show="*",
+                    parent=root,
+                )
+                if new_token is None:
+                    return
+                new_token = new_token.strip()
+                if not new_token:
+                    messagebox.showwarning("Jeton vide", "Aucun jeton saisi.", parent=root)
+                    return
+
+                old_token = self._agent.cfg.agent_token
+                self._agent.update_agent_token(new_token)
+                try:
+                    # Validation immediate
+                    self._agent.client.sync_status()
+                except Exception as e:
+                    self._agent.update_agent_token(old_token)
+                    messagebox.showerror(
+                        "Jeton invalide",
+                        f"Le jeton n'a pas ete accepte:\n{e}",
+                        parent=root,
+                    )
+                    return
+
+                cfg_path = os.environ.get("RAGUIA_AGENT_CONFIG")
+                if cfg_path:
+                    cfg_file = Path(cfg_path)
+                else:
+                    cfg_file = Path.home() / ".raguia" / "config.yaml"
+                cfg_file.parent.mkdir(parents=True, exist_ok=True)
+
+                data = {}
+                if cfg_file.is_file():
+                    with open(cfg_file, encoding="utf-8") as f:
+                        data = yaml.safe_load(f) or {}
+                data["agent_token"] = new_token
+                with open(cfg_file, "w", encoding="utf-8") as f:
+                    yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+                try:
+                    os.chmod(cfg_file, 0o600)
+                except Exception:
+                    pass
+
+                messagebox.showinfo(
+                    "Jeton mis a jour",
+                    "Le nouveau jeton est actif immediatement et enregistre.",
+                    parent=root,
+                )
+                self._on_agent_status(TrayStatus.IDLE, "Jeton mis a jour")
+            finally:
+                root.destroy()
+
+        def uninstall_agent(icon, item):
+            try:
+                import tkinter as tk
+                from tkinter import messagebox
+            except Exception:
+                self._on_agent_status(TrayStatus.ERROR, "UI desinstallation indisponible")
+                return
+
+            root = tk.Tk()
+            root.withdraw()
+            try:
+                ok = messagebox.askyesno(
+                    "Raguia — Desinstallation",
+                    (
+                        "Confirmer la desinstallation complete de l'agent ?\n\n"
+                        "- Arret de l'agent\n"
+                        "- Suppression du demarrage automatique\n"
+                        "- Suppression des fichiers agent/config locaux\n\n"
+                        "Le dossier de documents RAGUIA n'est pas supprime."
+                    ),
+                    icon="warning",
+                    parent=root,
+                )
+                if not ok:
+                    return
+
+                cfg_path = os.environ.get("RAGUIA_AGENT_CONFIG")
+                cfg_file = Path(cfg_path) if cfg_path else (Path.home() / ".raguia" / "config.yaml")
+                agent_dir = cfg_file.parent if cfg_file.name == "raguia_agent.yaml" else None
+                app_data_dir = Path.home() / ".raguia"
+
+                # 1) Desactiver le demarrage automatique selon l'OS
+                try:
+                    if os.name == "nt":
+                        startup = Path(os.path.expandvars(r"%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"))
+                        lnk = startup / "Raguia Agent.lnk"
+                        if lnk.exists():
+                            lnk.unlink()
+                    elif sys.platform == "darwin":
+                        plist = Path.home() / "Library" / "LaunchAgents" / "com.raguia.local.agent.plist"
+                        subprocess.run(
+                            ["/bin/bash", "-lc", f'launchctl bootout "gui/$(id -u)" "{plist}" 2>/dev/null || launchctl unload "{plist}" 2>/dev/null || true'],
+                            check=False,
+                        )
+                        if plist.exists():
+                            plist.unlink()
+                    else:
+                        unit = Path.home() / ".config" / "systemd" / "user" / "raguia-agent.service"
+                        subprocess.run(["systemctl", "--user", "disable", "--now", "raguia-agent.service"], check=False)
+                        subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+                        if unit.exists():
+                            unit.unlink()
+                except Exception:
+                    pass
+
+                # 2) Programmer la suppression des fichiers apres extinction du process
+                to_delete = []
+                if agent_dir and agent_dir.name == ".raguia_agent":
+                    to_delete.append(agent_dir)
+                to_delete.append(app_data_dir)
+
+                if os.name == "nt":
+                    quoted = " ".join(f'"{p}"' for p in to_delete)
+                    cmd = f'timeout /t 2 /nobreak >nul & for %d in ({quoted}) do if exist "%d" rmdir /s /q "%d"'
+                    subprocess.Popen(["cmd", "/c", cmd], creationflags=0x08000000)
+                else:
+                    quoted = " ".join(shlex.quote(str(p)) for p in to_delete)
+                    subprocess.Popen(
+                        ["/bin/bash", "-lc", f"sleep 2; rm -rf {quoted}"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+
+                messagebox.showinfo(
+                    "Desinstallation",
+                    "Desinstallation lancee. L'agent va s'arreter.",
+                    parent=root,
+                )
+                quit_agent(icon, item)
+            finally:
+                root.destroy()
+
         pending = self._agent.queue.pending_count()
         stuck   = self._agent.queue.stuck_count()
         last_ts = self._agent.queue.last_sync_at()
@@ -158,6 +311,8 @@ class RaguiaTray:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Ouvrir le dossier RAGUIA", open_folder),
             pystray.MenuItem("Synchroniser maintenant", sync_now),
+            pystray.MenuItem("Mettre a jour le jeton JWT…", update_jwt),
+            pystray.MenuItem("Desinstaller l'agent…", uninstall_agent),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(f"{pending} fichier(s) en attente", None, enabled=False),
             pystray.MenuItem(f"Derniere sync : {last_str}", None, enabled=False),

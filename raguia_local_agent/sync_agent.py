@@ -279,3 +279,11 @@ class SyncAgent:
 
     def stop(self) -> None:
         self._stop.set()
+
+    def update_agent_token(self, token: str) -> None:
+        """Met a jour le JWT en memoire (effet immediat pour les appels API suivants)."""
+        token = (token or "").strip()
+        if not token:
+            raise ValueError("Jeton vide")
+        self.cfg.agent_token = token
+        self.client.set_agent_token(token)

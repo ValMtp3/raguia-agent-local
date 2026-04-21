@@ -8,6 +8,7 @@ import logging
 import time
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -59,6 +60,33 @@ class PortalApiClient:
                 log.error("Le jeton agent serait envoye en clair sur le reseau.")
                 raise ValueError("L'URL du portail DOIT utiliser 'https://' pour des raisons de securite.")
 
+    def _parse_json_or_raise(self, r: httpx.Response, endpoint: str) -> dict[str, Any]:
+        try:
+            payload = r.json()
+        except json.JSONDecodeError:
+            ct = (r.headers.get("content-type") or "").lower()
+            preview = (r.text or "").strip().replace("\n", " ")[:200]
+            parsed = urlparse(self.api_base)
+            hint = ""
+            if "/portal/" in (parsed.path or "") or "text/html" in ct or preview.startswith("<!DOCTYPE") or preview.startswith("<html"):
+                hint = (
+                    " URL portail invalide : utilisez la racine (ex: https://mon-domaine.tld), "
+                    "pas une URL de page comme /portal/<slug>."
+                )
+            raise ValueError(
+                f"{endpoint}: reponse 200 non-JSON (content-type={ct!r}, body={preview!r}).{hint}"
+            )
+        if not isinstance(payload, dict):
+            raise ValueError(f"{endpoint}: reponse JSON invalide (objet attendu).")
+        return payload
+
+    def set_agent_token(self, token: str) -> None:
+        token = (token or "").strip()
+        if not token:
+            raise ValueError("Jeton vide")
+        self.agent_token = token
+        self._headers = {"Authorization": f"Bearer {token}"}
+
     def sync_status(self) -> dict[str, Any]:
         r = _request_with_retry(
             "GET",
@@ -67,7 +95,7 @@ class PortalApiClient:
             timeout=60.0,
         )
         r.raise_for_status()
-        return r.json()
+        return self._parse_json_or_raise(r, "sync-status")
 
     def sync_complete(
         self, metrics: Optional[dict[str, Any]] = None, error: Optional[str] = None
@@ -111,4 +139,4 @@ class PortalApiClient:
                 timeout=600.0,
             )
         r.raise_for_status()
-        return r.json()
+        return self._parse_json_or_raise(r, "upload")

@@ -7,6 +7,12 @@ set "API_BASE=%~1"
 set "TOKEN=%~2"
 set "WATCH_PARENT=%~3"
 
+if "%API_BASE%"=="" (
+  set /p API_BASE=URL du portail (ex: https://raguia.mondomaine.com): 
+)
+if "%TOKEN%"=="" (
+  set /p TOKEN=Jeton JWT agent: 
+)
 if "%API_BASE%"=="" goto usage
 if "%TOKEN%"=="" goto usage
 goto okargs
@@ -15,6 +21,9 @@ echo Usage: %~nx0 ^<API_BASE^> ^<AGENT_TOKEN^> [WATCH_PARENT]
 exit /b 1
 :okargs
 
+if "%WATCH_PARENT%"=="" (
+  set /p WATCH_PARENT=Dossier parent (defaut: %USERPROFILE%\Documents): 
+)
 if "%WATCH_PARENT%"=="" set "WATCH_PARENT=%USERPROFILE%\Documents"
 
 set "SCRIPT_DIR=%~dp0"
@@ -48,7 +57,7 @@ call uv pip install -e ".[tray]"
 
 echo.
 echo 4. Test de connexion...
-python -c "import httpx, yaml, sys; cfg = yaml.safe_load(open(r'%AGENT_DIR%\raguia_agent.yaml')); r = httpx.get(cfg['api_base'] + '/api/portal/agent/sync-status', headers={'Authorization': f'Bearer {cfg[\"agent_token\"]}'}, timeout=10.0); sys.exit(0 if r.status_code == 200 else 1)"
+python -c "import httpx, yaml, sys; cfg = yaml.safe_load(open(r'%AGENT_DIR%\raguia_agent.yaml')); r = httpx.get(cfg['api_base'] + '/api/portal/agent/sync-status', headers={'Authorization': f'Bearer {cfg[\"agent_token\"]}'}, timeout=10.0); sys.exit(1) if r.status_code != 200 else None; d = r.json(); sys.exit(0 if isinstance(d, dict) else 1)"
 if errorlevel 1 (
     echo   [ERREUR] Connexion echouee
 ) else (

@@ -14,13 +14,22 @@ API_BASE="${1:-}"
 TOKEN="${2:-}"
 WATCH_PARENT="${3:-}"
 
+if [[ -z "$API_BASE" ]]; then
+    read -r -p "URL du portail (ex: https://raguia.mondomaine.com): " API_BASE
+fi
+if [[ -z "$TOKEN" ]]; then
+    read -r -s -p "Jeton JWT agent: " TOKEN
+    echo ""
+fi
 if [[ -z "$API_BASE" || -z "$TOKEN" ]]; then
+    echo -e "${RED}API_BASE et AGENT_TOKEN sont obligatoires.${NC}"
     echo "Usage: $0 <API_BASE> <AGENT_TOKEN> [WATCH_PARENT]"
     exit 1
 fi
 
 if [[ -z "$WATCH_PARENT" ]]; then
-    WATCH_PARENT="$HOME/Documents"
+    read -r -p "Dossier parent (defaut: $HOME/Documents): " WATCH_PARENT
+    WATCH_PARENT="${WATCH_PARENT:-$HOME/Documents}"
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -120,7 +129,10 @@ if python -c "
 import httpx, yaml, sys
 with open('$AGENT_DIR/raguia_agent.yaml') as f: cfg = yaml.safe_load(f)
 r = httpx.get(cfg['api_base'] + '/api/portal/agent/sync-status', headers={'Authorization': f'Bearer {cfg[\"agent_token\"]}'}, timeout=10.0)
-sys.exit(0 if r.status_code == 200 else 1)
+if r.status_code != 200:
+    sys.exit(1)
+data = r.json()
+sys.exit(0 if isinstance(data, dict) else 1)
 " 2>/dev/null; then
     echo "  Connexion réussie!"
 else

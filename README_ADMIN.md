@@ -24,12 +24,14 @@ Ouvrez le terminal dans le dossier téléchargé et exécutez la commande avec v
 ```bash
 ./install.sh "https://raguia.client-domaine.com" "VOTRE_JETON_SAAS" "/chemin/vers/dossier/cible"
 ```
+Vous pouvez aussi lancer simplement `./install.sh` : le script vous pose les questions en CLI (URL, jeton JWT, dossier parent).
 
 #### Windows
 Ouvrez PowerShell ou l'Invite de commandes dans le dossier téléchargé et exécutez :
 ```powershell
 .\install.bat "https://raguia.client-domaine.com" "VOTRE_JETON_SAAS" "C:\chemin\vers\dossier\cible"
 ```
+Vous pouvez aussi lancer simplement `.\install.bat` : le script vous guide en CLI et demande les champs manquants.
 
 Le dossier **`.raguia_agent/`** est **fourni dans le dépôt** (scripts shell / batch). L’installation y ajoute ce qui est local à la machine : **`venv/`** (Python) et **`raguia_agent.yaml`** (jeton, chemins), non versionnés. Tant que **`install.sh`** ou **`install.bat`** n’a pas été exécuté, **`start`** ne peut pas fonctionner (pas de venv ni de configuration valide).
 
@@ -61,6 +63,12 @@ Depuis la racine du clone : `./.raguia_agent/test.sh` ou `.\.raguia_agent\test.
 - **start** : surveillance du dossier RAGUIA (icône tray si installé).
 - **test** : vérifie le portail / le jeton sans laisser l’agent tourner en continu.
 - **stop** : arrête l’agent.
+- **Mise à jour JWT via interface** : dans le menu tray, utilisez **« Mettre a jour le jeton JWT… »**. Le jeton est testé immédiatement puis sauvegardé dans la config.
+- **Désinstallation via interface** : dans le menu tray, utilisez **« Desinstaller l'agent… »** puis confirmez. La désinstallation :
+  - arrête l’agent,
+  - supprime le démarrage automatique (Windows/macOS/Linux),
+  - supprime les fichiers locaux de l’agent (`.raguia_agent` et `~/.raguia`).
+  - Le dossier de documents `RAGUIA` n’est pas supprimé.
 
 ### Erreur « no such file » ou venv manquant
 
