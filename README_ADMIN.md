@@ -20,53 +20,66 @@ cd raguia-agent-local
 ### Étape 2 : Lancer l'installation
 
 #### macOS / Linux
+
 Ouvrez le terminal dans le dossier téléchargé et exécutez la commande avec vos identifiants :
+
 ```bash
 ./install.sh "https://raguia.client-domaine.com" "VOTRE_JETON_SAAS" "/chemin/vers/dossier/cible"
 ```
+
 Vous pouvez aussi lancer simplement `./install.sh` : le script vous pose les questions en CLI (URL, jeton JWT, dossier parent).
 Par défaut, l’URL proposée est `https://raguia.valentin-fiess.fr` (prod).  
 Pour forcer un setup local, passez `local` en 4e argument :
+
 ```bash
 ./install.sh "" "" "" local
 ```
 
 #### Windows
+
 Ouvrez PowerShell ou l'Invite de commandes dans le dossier téléchargé et exécutez :
+
 ```powershell
 .\install.bat "https://raguia.client-domaine.com" "VOTRE_JETON_SAAS" "C:\chemin\vers\dossier\cible"
 ```
+
 Vous pouvez aussi lancer simplement `.\install.bat` : le script vous guide en CLI et demande les champs manquants.
 Par défaut, l’URL proposée est `https://raguia.valentin-fiess.fr` (prod).  
 Pour forcer un setup local :
+
 ```powershell
 .\install.bat "" "" "" local
 ```
 
-Le dossier **`.raguia_agent/`** est **fourni dans le dépôt** (scripts shell / batch). L’installation y ajoute ce qui est local à la machine : **`venv/`** (Python) et **`raguia_agent.yaml`** (jeton, chemins), non versionnés. Tant que **`install.sh`** ou **`install.bat`** n’a pas été exécuté, **`start`** ne peut pas fonctionner (pas de venv ni de configuration valide).
+Le dossier `**.raguia_agent/**` est **fourni dans le dépôt** (scripts shell / batch). L’installation y ajoute ce qui est local à la machine : `**venv/`** (Python) et `**raguia_agent.yaml**` (jeton, chemins), non versionnés.  
+Les scripts `**start.sh**` / `**test.sh**` (macOS/Linux) créent désormais automatiquement `venv/` s’il est absent. En revanche, sans `**raguia_agent.yaml**` valide (généré par `**install.sh**` / `**install.bat**`), l’agent ne peut pas se connecter correctement.
 
 ### Démarrage automatique (fait par l’installateur)
 
 L’installateur détecte l’OS et configure le lancement au démarrage de session utilisateur :
 
-| OS | Comportement |
-|----|----------------|
-| **Windows** | Raccourci **« Raguia Agent »** dans le dossier **Démarrage** (`Win+R` → `shell:startup`), cible `.raguia_agent\start.bat`. |
-| **macOS** | **LaunchAgent** `com.raguia.local.agent` dans `~/Library/LaunchAgents/`, exécution de `.raguia_agent/start.sh`. |
-| **Linux** | Unité **systemd utilisateur** `raguia-agent.service` sous `~/.config/systemd/user/`. Sur certains serveurs : `loginctl enable-linger $USER` pour que le service utilisateur tourne sans session graphique. |
+
+| OS          | Comportement                                                                                                                                                                                               |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Windows** | Raccourci **« Raguia Agent »** dans le dossier **Démarrage** (`Win+R` → `shell:startup`), cible `.raguia_agent\start.bat`.                                                                                 |
+| **macOS**   | **LaunchAgent** `com.raguia.local.agent` dans `~/Library/LaunchAgents/`, exécution de `.raguia_agent/start.sh`.                                                                                            |
+| **Linux**   | Unité **systemd utilisateur** `raguia-agent.service` sous `~/.config/systemd/user/`. Sur certains serveurs : `loginctl enable-linger $USER` pour que le service utilisateur tourne sans session graphique. |
+
 
 Pour **désactiver** l’auto-démarrage : supprimez le raccourci Windows, ou le `.plist` / désactivez le service systemd utilisateur comme indiqué plus bas.
 
 ## 2. Commandes de contrôle (`.raguia_agent`)
 
-Les scripts ne sont **pas** à la racine du clone : tout est sous **`.raguia_agent/`**.
+Les scripts ne sont **pas** à la racine du clone : tout est sous `**.raguia_agent/`**.
 
-| Action | macOS / Linux | Windows |
-|--------|----------------|---------|
+
+| Action                | macOS / Linux      | Windows            |
+| --------------------- | ------------------ | ------------------ |
 | Aller dans le dossier | `cd .raguia_agent` | `cd .raguia_agent` |
-| Lancer l'agent | `./start.sh` | `.\start.bat` |
-| Tester la connexion | `./test.sh` | `.\test.bat` |
-| Arrêter | `./stop.sh` | `.\stop.bat` |
+| Lancer l'agent        | `./start.sh`       | `.\start.bat`      |
+| Tester la connexion   | `./test.sh`        | `.\test.bat`       |
+| Arrêter               | `./stop.sh`        | `.\stop.bat`       |
+
 
 Depuis la racine du clone : `./.raguia_agent/test.sh` ou `.\.raguia_agent\test.bat`.
 
@@ -83,7 +96,8 @@ Depuis la racine du clone : `./.raguia_agent/test.sh` ou `.\.raguia_agent\test.
 ### Erreur « no such file » ou venv manquant
 
 - Vous avez lancé `./test.sh` à la racine : utilisez `./.raguia_agent/test.sh` ou `cd .raguia_agent` d’abord.
-- **Module introuvable** : exécutez **`install.sh`** / **`install.bat`** pour créer `venv/` et `raguia_agent.yaml`.
+- **`python3` introuvable** : installez Python 3 puis relancez le script.
+- **Module introuvable** : exécutez `**install.sh`** / `**install.bat**` pour créer la configuration `raguia_agent.yaml` et préparer l’environnement local.
 
 ## 3. Désactiver / ajuster le démarrage automatique
 
@@ -100,3 +114,4 @@ Installation manuelle du démarrage (sans passer par l’installateur) : possib
 - **Erreurs 401/403** : Vérifier le jeton et l’URL du portail dans `.raguia_agent/raguia_agent.yaml`. Testez avec `cd .raguia_agent && ./test.sh` (ou `.\test.bat` sous Windows).
 - **Fichiers ignorés** : L'agent ignore volontairement les fichiers temporaires (`~$*.docx`, `.tmp`).
 - **Logs** : Situés par défaut dans un fichier `.raguia_agent/raguia_agent.log` ou le dossier `.raguia/` de l'utilisateur.
+
