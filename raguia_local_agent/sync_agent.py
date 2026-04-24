@@ -331,7 +331,11 @@ class SyncAgent:
             parts = self.cfg.agent_token.split(".")
             if len(parts) != 3:
                 return
-            payload = _json.loads(base64.urlsafe_b64decode(parts[1] + "=="))
+            
+            payload_b64 = parts[1]
+            payload_b64 += "=" * ((4 - len(payload_b64) % 4) % 4)
+            payload = _json.loads(base64.urlsafe_b64decode(payload_b64))
+            
             exp = payload.get("exp")
             if not exp:
                 return
@@ -340,12 +344,22 @@ class SyncAgent:
                 log.error("Token EXPIRE ! Renouvelez depuis le portail.")
                 self._emit("error", "Token expire")
             elif days <= 7:
-                log.warning("Token expire dans %.1f jours.", days)
-                self._emit("warning", f"Token expire dans {days:.0f} j")
+                log.info("Token expire dans %.1f jours. Tentative de renouvellement automatique...", days)
+                try:
+                    res = self.client.refresh_token()
+                    new_token = res.get("access_token")
+                    if new_token:
+                        self.cfg.save_token(new_token)
+                        self.client.set_agent_token(new_token)
+                        log.info("Token renouvele avec succes !")
+                        self._emit("idle")
+                except Exception as e:
+                    log.error("Echec du renouvellement auto du token : %s", e)
+                    self._emit("warning", f"Token expire dans {days:.0f} j (echec refresh)")
             else:
                 log.debug("Token valide (%.0f jours restants)", days)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Erreur verification token : %s", e)
 
     def _apply_remote_deletions(self, st: dict) -> None:
         """Supprime localement les fichiers mis en corbeille depuis le portail."""

@@ -97,6 +97,17 @@ class PortalApiClient:
         r.raise_for_status()
         return self._parse_json_or_raise(r, "sync-status")
 
+    def refresh_token(self) -> dict[str, Any]:
+        """Demande un nouveau token au portail."""
+        r = _request_with_retry(
+            "POST",
+            f"{self.api_base}/api/portal/agent/refresh-token",
+            headers=self._headers,
+            timeout=30.0,
+        )
+        r.raise_for_status()
+        return self._parse_json_or_raise(r, "refresh-token")
+
     def delete_local(self, relative_path: str) -> dict[str, Any]:
         """Met en corbeille sur le portail le document lié à ce chemin relatif."""
         r = _request_with_retry(

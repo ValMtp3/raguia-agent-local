@@ -57,6 +57,22 @@ class AgentConfig:
         ".pptx", ".png", ".jpg", ".jpeg", ".webp",
     )
     extra: dict[str, Any] = field(default_factory=dict)
+    cfg_path: Path | None = None
+
+    def save_token(self, token: str) -> None:
+        """Enregistre le nouveau token dans le fichier YAML et en mémoire."""
+        self.agent_token = token
+        if not self.cfg_path or not self.cfg_path.is_file():
+            return
+        try:
+            with open(self.cfg_path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+            data["agent_token"] = token
+            with open(self.cfg_path, "w", encoding="utf-8") as f:
+                yaml.dump(data, f, default_flow_style=False)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error("Impossible de sauvegarder le nouveau token dans %s : %s", self.cfg_path, e)
 
     @property
     def root_path(self) -> Path:
@@ -137,6 +153,8 @@ def load_config(path: Path | None = None) -> AgentConfig:
 
     if not cfg.watch_parent:
         cfg.watch_parent = _detect_documents_folder()
+
+    cfg.cfg_path = path
 
     return cfg
 
