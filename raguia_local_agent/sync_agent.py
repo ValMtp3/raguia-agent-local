@@ -33,7 +33,6 @@ from .watcher import _should_ignore, start_observer
 log = logging.getLogger(__name__)
 
 AGENT_VERSION = "0.1.0"
-_MAX_FILE_SIZE_WARN = 50 * 1024 * 1024  # 50 MB
 
 
 class SyncAgent:
@@ -55,6 +54,16 @@ class SyncAgent:
 
         # Callback pour le tray (optionnel)
         self.on_status_change: Optional[Callable] = None
+
+    def _get_local_folder_size(self) -> int:
+        total = 0
+        try:
+            for p in self.root.rglob("*"):
+                if p.is_file() and not _should_ignore(p):
+                    total += p.stat().st_size
+        except Exception as e:
+            log.warning("Erreur calcul taille dossier: %s", e)
+        return total
 
     # ------------------------------------------------------------------
     # Status tray
@@ -86,7 +95,7 @@ class SyncAgent:
     # ------------------------------------------------------------------
     # Cycle de synchronisation
     # ------------------------------------------------------------------
-    def run_cycle(self, reason: str) -> dict:
+    def run_cycle(self, reason: str, limit_bytes: Optional[int] = None) -> dict:
         metrics: dict = {"reason": reason, "uploaded": 0, "deleted": 0, "errors": []}
         batch = self.queue.pop_batch(
             self.cfg.max_files_per_cycle,
@@ -101,6 +110,15 @@ class SyncAgent:
         upload_items = [
             i for i in batch if (i.get("event_type") or "modified") != "deleted"
         ]
+
+        if limit_bytes is not None and upload_items:
+            current_size = self._get_local_folder_size()
+            if current_size > limit_bytes:
+                msg = f"Quota depasse: taille locale ({current_size // 1024 // 1024} Mo) > limite ({limit_bytes // 1024 // 1024} Mo)"
+                log.error(msg)
+                self._emit("error", "Quota depasse")
+                upload_items = []
+                metrics["errors"].append(msg)
 
         self._emit("syncing")
 
@@ -283,7 +301,7 @@ class SyncAgent:
 
                 if reason:
                     last_cooldown_ts = time.time()
-                    m = self.run_cycle(reason)
+                    m = self.run_cycle(reason, limit_bytes=st.get("max_storage_bytes"))
                     err_str = ("; ".join(m["errors"])[:2000] if m.get("errors") else None)
                     try:
                         self.client.sync_complete(metrics=m, error=err_str)
